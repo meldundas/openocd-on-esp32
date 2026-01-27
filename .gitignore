@@ -23,3 +23,8 @@ workspace.code-workspace
 sdkconfig
 sdkconfig.old
 
+esp-idf/
+
+managed_components/
+components/jimtcl/src/
+components/jimtcl/tmp/
