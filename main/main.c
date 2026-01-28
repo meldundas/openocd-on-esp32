@@ -9,6 +9,9 @@
 #include "nvs_flash.h"
 #include "esp_check.h"
 #include "driver/uart.h"
+#include "driver/gpio.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include "types.h"
 #include "storage.h"
@@ -267,9 +270,57 @@ void init_idf_components(void)
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 }
 
+#define BOOT_BUTTON_GPIO          GPIO_NUM_1
+#define BUTTON_ACTIVE_LEVEL       0
+
+static void button_monitor_task(void *arg)
+{
+    gpio_config_t io_conf = {
+        .pin_bit_mask = (1ULL << BOOT_BUTTON_GPIO),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE
+    };
+    gpio_config(&io_conf);
+
+    // Initial stabilization delay
+    vTaskDelay(pdMS_TO_TICKS(500));
+
+    ESP_LOGI(TAG, "Button monitor active on GPIO %d. Hold for 3s to reset WiFi.", BOOT_BUTTON_GPIO);
+
+    int press_count = 0;
+    while (1) {
+        if (gpio_get_level(BOOT_BUTTON_GPIO) == BUTTON_ACTIVE_LEVEL) {
+            press_count++;
+            if (press_count % 10 == 0) {
+                ESP_LOGI(TAG, "Button held for %d seconds...", press_count / 10);
+            }
+            
+            if (press_count >= 30) { // 3 seconds
+                ESP_LOGW(TAG, "Reset triggered! Erasing WiFi credentials and restarting...");
+                ui_show_info_screen("Resetting WiFi settings...");
+                storage_erase_key(WIFI_SSID_KEY);
+                storage_erase_key(WIFI_PASS_KEY);
+                
+                // Wait for button release before rebooting
+                while (gpio_get_level(BOOT_BUTTON_GPIO) == BUTTON_ACTIVE_LEVEL) {
+                    vTaskDelay(pdMS_TO_TICKS(50));
+                }
+                vTaskDelay(pdMS_TO_TICKS(500));
+                esp_restart();
+            }
+        } else {
+            press_count = 0;
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+}
+
 void app_main(void)
 {
     init_idf_components();
+    xTaskCreate(button_monitor_task, "button_monitor", 4096, NULL, 5, NULL);
     ui_init();
     load_openocd_params();
     load_network_params();
